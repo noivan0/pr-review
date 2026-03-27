@@ -36,3 +36,4 @@ def login(username, password):
         f"SELECT * FROM users WHERE username='{username}' AND password='{password}'"
     )
     return result.fetchone() is not None
+# trigger: 2026년 03월 27일 금 오후 12:17:14
