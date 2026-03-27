@@ -65,6 +65,12 @@ GH_HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
 }
 
+# ANTHROPIC_BASE_URL이 /messages로 끝나면 SDK URL 조립을 건너뛰고 httpx 직접 호출
+# (SDK가 base_url + /v1/messages를 붙여 이중 경로 404 발생하는 케이스 대응)
+_DIRECT_ENDPOINT_MODE: bool = bool(
+    ANTHROPIC_BASE_URL and ANTHROPIC_BASE_URL.rstrip("/").endswith("/messages")
+)
+
 # ---------------------------------------------------------------------------
 # 시스템 프롬프트 (review_service.py에서 재사용)
 # ---------------------------------------------------------------------------
@@ -282,8 +288,17 @@ async def fetch_pr_diff(client: httpx.AsyncClient, pr_number: int) -> PRDiff:
 # ---------------------------------------------------------------------------
 
 
-def _build_anthropic_client() -> AsyncAnthropic:
-    """Dual-auth: ANTHROPIC_AUTH_TOKEN(Bearer) 또는 ANTHROPIC_API_KEY"""
+def _build_anthropic_client() -> AsyncAnthropic | None:
+    """Dual-auth: ANTHROPIC_AUTH_TOKEN(Bearer) 또는 ANTHROPIC_API_KEY
+
+    _DIRECT_ENDPOINT_MODE가 True이면 None을 반환 — 호출자가 httpx를 직접 사용한다.
+    """
+    if _DIRECT_ENDPOINT_MODE:
+        if not (ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY):
+            raise RuntimeError("ANTHROPIC_API_KEY 또는 ANTHROPIC_AUTH_TOKEN이 필요합니다.")
+        logger.info("Direct endpoint mode: POST %s", ANTHROPIC_BASE_URL)
+        return None
+
     kwargs: dict[str, Any] = {}
     if ANTHROPIC_BASE_URL:
         kwargs["base_url"] = ANTHROPIC_BASE_URL
@@ -398,6 +413,50 @@ def _validate_comments(
     return result
 
 
+async def _call_claude_direct(system_prompt: str, user_message: str) -> str:
+    """_DIRECT_ENDPOINT_MODE: ANTHROPIC_BASE_URL에 httpx 직접 POST."""
+    token = ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    payload = {
+        "model": MODEL,
+        "max_tokens": MAX_TOKENS,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_message}],
+    }
+
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=5.0)) as client:
+                resp = await client.post(ANTHROPIC_BASE_URL, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                text = "".join(
+                    block.get("text", "") for block in data.get("content", [])
+                    if block.get("type") == "text"
+                )
+                usage = data.get("usage", {})
+                logger.info(
+                    "Claude 응답 (direct): input_tokens=%d, output_tokens=%d",
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                )
+                return text
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            last_exc = exc
+            wait = 2 ** attempt
+            logger.warning("Direct API 오류 (시도 %d/3): %s — %ds 후 재시도", attempt, exc, wait)
+            if attempt < 3:
+                await asyncio.sleep(wait)
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Direct API HTTP 오류: {exc.response.status_code} — {exc.response.text[:200]}") from exc
+
+    raise RuntimeError(f"Direct API 3회 실패: {last_exc}") from last_exc
+
+
 async def review_with_claude(
     diff: PRDiff,
     pr_title: str,
@@ -407,37 +466,41 @@ async def review_with_claude(
     system_prompt = REVIEW_SYSTEM_PROMPT_KO if LANGUAGE == "ko" else REVIEW_SYSTEM_PROMPT_EN
     user_message = _build_user_message(diff, pr_title, pr_body)
 
-    anthropic = _build_anthropic_client()
-
-    # tenacity 없이 단순 retry (3회)
-    last_exc: Exception | None = None
-    for attempt in range(1, 4):
-        try:
-            response = await anthropic.messages.create(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-            )
-            break
-        except (RateLimitError, APITimeoutError, APIConnectionError) as exc:
-            last_exc = exc
-            wait = 2 ** attempt
-            logger.warning("Claude API 오류 (시도 %d/3): %s — %ds 후 재시도", attempt, exc, wait)
-            if attempt < 3:
-                await asyncio.sleep(wait)
+    if _DIRECT_ENDPOINT_MODE:
+        _build_anthropic_client()  # 인증 정보 검증만
+        text = await _call_claude_direct(system_prompt, user_message)
     else:
-        raise RuntimeError(f"Claude API 3회 실패: {last_exc}") from last_exc
+        anthropic = _build_anthropic_client()
 
-    text = "".join(
-        block.text for block in response.content if hasattr(block, "text")
-    )
+        # tenacity 없이 단순 retry (3회)
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                response = await anthropic.messages.create(
+                    model=MODEL,
+                    max_tokens=MAX_TOKENS,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+                break
+            except (RateLimitError, APITimeoutError, APIConnectionError) as exc:
+                last_exc = exc
+                wait = 2 ** attempt
+                logger.warning("Claude API 오류 (시도 %d/3): %s — %ds 후 재시도", attempt, exc, wait)
+                if attempt < 3:
+                    await asyncio.sleep(wait)
+        else:
+            raise RuntimeError(f"Claude API 3회 실패: {last_exc}") from last_exc
 
-    logger.info(
-        "Claude 응답: input_tokens=%d, output_tokens=%d",
-        response.usage.input_tokens,
-        response.usage.output_tokens,
-    )
+        text = "".join(
+            block.text for block in response.content if hasattr(block, "text")
+        )
+
+        logger.info(
+            "Claude 응답: input_tokens=%d, output_tokens=%d",
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
 
     raw_comments = _parse_json_response(text)
     valid_paths = {f.path for f in diff.files}
