@@ -1,0 +1,38 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    # 내부 Claude API(사내망) 사용 시: runs-on: self-hosted
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv & dependencies
+        run: |
+          pip install uv
+          uv sync
+
+      - name: Run PR Review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 내부 API(사내망) 사용 시 아래 두 항목 사용:
+          # ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          # ANTHROPIC_BASE_URL:   ${{ secrets.ANTHROPIC_BASE_URL }}
+          REVIEW_LANGUAGE: ko
+          MAX_FILE_LINES: "500"
+          MAX_TOTAL_LINES: "3000"
+        run: uv run python scripts/pr_reviewer.py
