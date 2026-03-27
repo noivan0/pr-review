@@ -196,6 +196,26 @@ cursor.execute(query, (user_id,))
 
 ---
 
+## 💝 후원 (Sponsor)
+
+이 프로젝트가 도움이 되었다면 커피 한 잔 값으로 개발을 응원해주세요.
+후원금은 Claude API 비용과 프로젝트 유지·개선에 사용됩니다.
+
+| 네트워크 | 지갑 주소 |
+|----------|-----------|
+| EVM (ETH / BNB / Polygon / 기타) | `0x2ad793ad3e35b28ea64c428b0882ffb186eb0ecc` |
+
+```
+0x2ad793ad3e35b28ea64c428b0882ffb186eb0ecc
+```
+
+> MetaMask, Trust Wallet 등 EVM 호환 지갑에서 위 주소로 전송하시면 됩니다.
+> USDT, ETH, BNB, MATIC 등 EVM 계열 토큰이라면 모두 수신 가능합니다.
+
+감사합니다! 🙏
+
+---
+
 ## License
 
 MIT © [noivan0](https://github.com/noivan0)
