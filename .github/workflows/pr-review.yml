@@ -11,6 +11,10 @@ jobs:
       pull-requests: write
       contents: read
 
+    defaults:
+      run:
+        shell: bash   # PowerShell 그룹 정책 차단 우회 (Git Bash 사용)
+
     steps:
       - uses: actions/checkout@v4
 
