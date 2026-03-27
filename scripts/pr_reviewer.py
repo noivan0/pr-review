@@ -172,7 +172,7 @@ def load_pr_info() -> dict[str, Any]:
     로컬 테스트: PR_NUMBER, PR_TITLE, HEAD_SHA 환경변수로 대체.
     """
     if EVENT_PATH and Path(EVENT_PATH).exists():
-        event = json.loads(Path(EVENT_PATH).read_text())
+        event = json.loads(Path(EVENT_PATH).read_text(encoding="utf-8"))
         pr = event.get("pull_request", {})
         return {
             "number": pr["number"],
