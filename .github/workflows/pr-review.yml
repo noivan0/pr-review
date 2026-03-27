@@ -6,8 +6,7 @@ on:
 
 jobs:
   review:
-    # 내부 Claude API(사내망) 사용 시: runs-on: self-hosted
-    runs-on: ubuntu-latest
+    runs-on: self-hosted   # 사내 내부 API 사용 (self-hosted runner 필요)
     permissions:
       pull-requests: write
       contents: read
@@ -28,10 +27,8 @@ jobs:
       - name: Run PR Review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # 내부 API(사내망) 사용 시 아래 두 항목 사용:
-          # ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
-          # ANTHROPIC_BASE_URL:   ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           REVIEW_LANGUAGE: ko
           MAX_FILE_LINES: "500"
           MAX_TOTAL_LINES: "3000"
